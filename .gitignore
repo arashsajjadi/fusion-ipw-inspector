@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Fusion / local artefacts
+*.log
+*.stl
+*.3mf
+*.obj
+*.f3d
+*.f3z
+dist/
+build/
+*.zip

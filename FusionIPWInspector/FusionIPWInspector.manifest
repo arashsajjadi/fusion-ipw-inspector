@@ -1,0 +1,13 @@
+{
+    "autodeskProduct": "Fusion",
+    "type": "addin",
+    "id": "8d3f1c2e-6b7a-4e5d-9f10-2a4c6e8b0d31",
+    "author": "Fusion IPW Inspector contributors",
+    "description": {
+        "": "Inspect Fusion in-process stock and read X, Y, Z coordinates relative to any Manufacturing Setup WCS."
+    },
+    "version": "0.1.0",
+    "runOnStartup": true,
+    "supportedOS": "windows|mac",
+    "editEnabled": true
+}
