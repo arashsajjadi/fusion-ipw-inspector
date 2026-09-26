@@ -137,6 +137,12 @@ selection filter alone makes Fusion pre-highlight matching bodies. With model se
 input now carries a filter that never matches the stock; the overlay keeps its shading and Fusion
 does no per-move work on it. Verified on the installed build, then released as 0.4.1.
 
+Checked afterwards: the overlay's colour still differed between sessions (pink, orange, yellow,
+green) but stayed constant while hovering, so it was not a highlight but Fusion's *Component
+Color Cycling* applied to the freshly imported component. Assigning a library appearance to the
+mesh body did not override it, so that experiment was reverted and the behaviour is documented in
+the README instead.
+
 ## Conventions from here on
 
 Granular conventional commits as work happens (`fix(ui): …`, `feat(snap): …`, `test(…): …`,

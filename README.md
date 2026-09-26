@@ -315,6 +315,10 @@ undocumented command ids and no UI automation are used by the add-in.
 - Tab cycling only works while the viewport owns the keyboard focus; use **N**.
 - The first open of a stock prepares its features for about 4 s in the background (the dialog is
   usable meanwhile, snapping uses the local fallback); later opens load the cache in 0.2 s.
+- If Fusion's *Component Color Cycling* display option is on, the overlay gets one of the cycling
+  colours each time it is imported (it is a new component); an explicit appearance does not
+  override that. Turn colour cycling off for the plain shading. The colour never changes while
+  hovering.
 - Reopening the dialog re-imports the display mesh (about 2 s): the temporary component is removed
   on close by design, and the import is Fusion's own cost.
 - Switching to another document while the inspector is open closes it; the temporary stock of the
