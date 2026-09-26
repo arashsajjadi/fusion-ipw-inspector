@@ -111,6 +111,14 @@ class SetupFrame:
         """Rotate a direction vector from world space into the WCS (no translation)."""
         return (_dot(v, self.axis_x), _dot(v, self.axis_y), _dot(v, self.axis_z))
 
+    def setup_vector_to_world(self, v: Vec3) -> Vec3:
+        """Rotate a direction vector from the WCS into world space (no translation)."""
+        return (
+            v[0] * self.axis_x[0] + v[1] * self.axis_y[0] + v[2] * self.axis_z[0],
+            v[0] * self.axis_x[1] + v[1] * self.axis_y[1] + v[2] * self.axis_z[1],
+            v[0] * self.axis_x[2] + v[1] * self.axis_y[2] + v[2] * self.axis_z[2],
+        )
+
     def matrix_rows(self) -> list:
         """The 16 row-major values of the setup->world matrix (for round trips)."""
         return [
