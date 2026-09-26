@@ -1,37 +1,60 @@
 # Snapping on the in-process stock
 
-How a hover over the IPW mesh becomes a CORNER, EDGE or SURFACE candidate, what is rejected,
+How a mouse position over the IPW becomes a CORNER, EDGE or SURFACE candidate, what is rejected,
 how the result is validated, and what it costs. Everything here is pure Python
-(`core/mesh_index.py`, `core/snap.py`); Fusion only supplies the hover hit point and the camera.
+(`core/mesh_index.py`, `core/features.py`, `core/snap.py`); Fusion only supplies the mouse
+position and the camera. The full-resolution exported STL is the only source of coordinates; the
+mesh Fusion draws is display only.
 
-## Pipeline per hover
+## Once per stock (background thread, cached)
 
-1. **Hit.** Fusion's `preSelectMouseMove` gives the world point under the cursor on the temporary
-   stock mesh. It is transformed into the mesh (setup) frame with the setup WCS.
-2. **Radius.** A 12 px screen tolerance is converted to millimetres at the depth of the hit by
-   projecting the hit and a point 1 mm to its right through `Viewport.modelToViewSpace`
-   (`snap_controller.radius_mm`). Clamped to 0.02–5 mm.
-3. **Neighbourhood.** `MeshIndex.triangles_near(hit, radius)` returns the triangles whose cells
-   intersect the sphere (bounded to 4000 triangles).
-4. **Planes.** Triangle normals are clustered greedily (12° cone, 0.05 mm offset). Each cluster is a
-   candidate plane with an area-weighted normal, an RMS residual of its vertices and a support
-   count. Clusters with less than 3 % of the local area are dropped.
-5. **Features.**
-   - CORNER: every triple of planes whose normal matrix has |det| ≥ 0.15 is intersected; the point
-     must lie within 1.5 × radius of the hit and within reach of each plane's support.
-   - EDGE: every pair of planes at ≥ 20° is intersected into a line; the hit is projected onto it,
-     with the same reach checks.
-   - SURFACE: the hit projected onto each plane.
-   - RAW: the hit itself, always present.
-6. **Ranking.** CORNER > EDGE > SURFACE > RAW, then by distance from the hit.
-7. **Hysteresis and cycling.** `SnapTracker` keeps the current candidate while an equivalent one
-   is still available (same kind, same location within half the radius, same direction for edges,
-   same plane for surfaces). It switches when the feature disappears or a higher-priority one is
-   clearly closer. **N** cycles through the list; a cycled choice is sticky until the cursor leaves
-   the feature (the hover Fusion fires right before a click would otherwise revert it).
-8. **Commit.** A click uses the previewed candidate if it is still within reach of the click
-   point, otherwise it snaps afresh. The candidate is transformed back to world coordinates and
-   then into the selected setup's WCS like any other pick.
+1. **Index.** The STL is read into one `array('f')` and a uniform grid is built over the
+   triangles (about 16 per cell; 0.41 mm cells on the watch case). 1.27 s for 828 912 triangles.
+2. **Feature graph** (`FeatureGraph.build`, 4.25 s in Fusion's Python):
+   - normals and areas of all triangles (one pass);
+   - per grid cell, triangles are clustered into cell planes (10°, 0.05 mm);
+   - cell planes of neighbouring cells that describe the same plane are merged with a union-find
+     into patches (4°, 0.06 mm mutual offset); a cell plane that drifted more than 6° / 0.1 mm from
+     its patch's plane (curved surfaces) is split off; every patch gets an area-weighted plane from
+     its unique triangles and an RMS residual over all their vertices;
+   - patches present in neighbouring cells are adjacent; adjacent good patches (residual ≤ 0.05 mm,
+     each at least three cells wide across the edge) at ≥ 20° give edges, clipped to the runs of
+     cells where both faces really meet;
+   - an edge plus a third patch adjacent to both gives a corner when |det| of the unit normals is
+     ≥ 0.15 and the point lies on the edge run where all three patches are present.
+   Corners, edge segments and patches are registered in coarse cells (about 3 mm) for O(1) lookup.
+3. **Cache.** Index and graph are written as plain data next to the exported stock
+   (`<stock>.stl.snapcache`, 51 MB, 0.2 s to write, 0.16 s to load). The stock fingerprint ignores
+   the STL attribute bytes Fusion leaves undefined, so an unchanged stock keeps its cache across
+   exports, dialog sessions and Fusion restarts. A stale cache (different stock or layout version)
+   is rebuilt.
+
+## Per hover (main thread, 2.3 ms median including the marker)
+
+1. **Ray.** `Command.mouseMove` gives the viewport position; `Viewport.viewToModelSpace` and the
+   camera eye/target give a ray, expressed in the mesh frame through the setup WCS (0.08 ms).
+2. **Cast.** Amanatides–Woo traversal of the grid; only the triangles of the cells the ray crosses
+   are tested, front to back, stopping at the first hit (0.03 ms median).
+3. **Tolerance.** 12 px converted to millimetres at the hit depth by projecting a 10 mm step
+   through `modelToViewSpace` (0.12 ms). Clamped to 0.02–5 mm.
+4. **Query.** The coarse cells within two tolerances of the hit give the cached corners (point
+   distance), edge segments (closest point on the segment) and patches (projection; the patch under
+   the hit triangle always counts) (0.07 ms median, 0.45 ms p95). While the graph is still building,
+   the 0.3.0 local reconstruction (`snap.snap`) is used with geometric keys so the tracker behaves
+   the same.
+5. **Magnetic tracker** (`MagneticTracker`): candidates are ordered CORNER > EDGE > SURFACE > RAW,
+   then by distance. A feature is acquired within the tolerance R and retained while the same
+   feature (by id) is within 2 R. A higher-priority feature within R takes over; a same-priority
+   feature only when it is within R and closer by at least 0.5 R. **N** cycles through the
+   candidates; the choice sticks while the feature stays within reach.
+6. **Marker.** One persistent custom-graphics group per feature kind plus a label group; a hover
+   only sets the group's transform (position, size, edge direction), toggles visibility between
+   kinds and updates the label text when it changes (1.9 ms, mostly Fusion API calls). Fusion does
+   not repaint custom graphics by itself, so a repaint is requested at most 60 times per second;
+   moves inside the same frame schedule one deferred repaint.
+7. **Click.** `mouseDown`/`mouseUp` without drag commits the previewed candidate from an idle
+   event, after Fusion finished its own selection handling; when *Allow model selection* is on and
+   Fusion selected model geometry for the same click, that pick wins.
 
 ## Why internal triangulation edges never appear
 
@@ -63,6 +86,25 @@ there is no second plane to intersect. Unit test:
 Advanced shows the raw numbers: method, residual, conditioning, distance from the hit, and the
 index statistics.
 
+## Measured on the watch case (Setup5, 828 912 triangles), 0.3.0 vs 0.4.0
+
+| Stage per hover | 0.3.0 | 0.4.0 |
+|-----------------|-------|-------|
+| entity check / ray + cast | 0.14 ms | 0.08 + 0.03 ms |
+| screen tolerance | 0.15 ms | 0.12 ms |
+| geometric query | 4.59 ms (local reconstruction) | 0.07 ms (cached features) |
+| tracker | 0.01 ms | 0.02 ms |
+| marker update | 5.70 ms (delete + recreate) | 1.85 ms (transform + label) |
+| viewport repaint | 7.20 ms every event | 0 ms median, 5–7 ms at most 60×/s |
+| total per event | 17.7 ms median, 19.5 ms p95 | 2.3 ms median, 7.6 ms p95 |
+| events per second sustained | 56 (saturated by the pipeline) | 170 (limited by the mouse) |
+
+Cold open: export 0.33 s, display import 2.1–2.3 s, dialog 0.015 s, then index 1.27 s and
+features 4.25 s in the background (snapping falls back to local reconstruction meanwhile). Warm
+open: the same export and import, features from memory (same session) or from the cache file in
+0.16 s. Remaining O(N) work: STL read, grid build and feature extraction (once per stock, cached),
+and Fusion's own import of the display mesh.
+
 ## Evidence on the watch case (Setup5, 828 912 triangles)
 
 Expected values were derived independently from the stock STL that Fusion exports for the setup:
@@ -72,15 +114,26 @@ the planes x = 2.0776, y = 25.150, z = 22.000 (top) and z = 17.920 (underside of
 
 | Feature | Expected | Measured (installed 0.3.0) | Error |
 |---------|----------|----------------------------|-------|
-| corner (2.0776, 25.150, 22.000), cursor 0.56 mm away | exact | (2.0776, 25.1500, 22.0000), residual 0.0000, cond 1.00 | 0.0000 mm |
-| corner (2.0776, −25.150, 22.000), cursor 0.48 mm away | exact | (2.0776, −25.1500, 22.0000), residual 0.0000, cond 1.00 | 0.0000 mm |
-| corner (2.0776, 25.150, 17.920), cursor 0.40 mm away | exact | (2.0776, 25.1500, 17.9212), residual 0.0003, cond 1.00 | 0.0012 mm (tessellation of the underside: z 17.919–17.921 in the file) |
-| edge x = 2.0776, z = 22 | line | (2.0776, 19.9322, 22.0000), residual 0.0000 | 0.0000 off the line |
-| face z = 22 | plane | (0.1661, 19.9322, 22.0000), residual 0.0000 | 0.0000 off the plane |
+| corner A (2.0776, 25.150, 22.000), cursor 0.57 mm away | exact | (2.0774, 25.1500, 22.0000), residual 0.0004, cond 1.00 | 0.0002 mm |
+| corner B (2.0776, −25.150, 22.000), cursor 0.63 mm away | exact | (2.0773, −25.1500, 22.0000), residual 0.0003 | 0.0003 mm |
+| corner C (−3.472, 25.150, 22.000), cursor 0.65 mm away | exact | (−3.4727, 25.1500, 22.0000), residual 0.0008 | 0.0007 mm |
+| corner D (2.0776, 25.150, 17.920), cursor 0.52 mm away | exact | (2.0777, 25.1500, 17.9243), residual 0.0036 | 0.0043 mm (the underside plane fitted over its whole face: z 17.919–17.921 in the file) |
+| edge x = 2.0776, z = 22 | line | (2.0774, 20.0036, 22.0000), residual 0.0004 | 0.0002 off the line |
+| face z = 22 | plane | (−0.4813, 20.0036, 22.0000), residual 0.0000 | 0.0000 off the plane |
+| corners A and C (same tab, same top and side faces) | shared y and z | y 25.1500 / 25.1500, z 22.0000 / 22.0000 | identical to 1e-5 mm (same fitted patches) |
+
+The 0.3.0 values (local reconstruction) are in the Git history of this file; the 0.4.0 corners
+come from planes fitted over whole faces, so A/B/C share the x = 2.0774 face plane exactly.
+
+Magnetic behaviour recorded on the installed build (1 px cursor steps along the tab's top edge
+towards corner A, past it and back, tolerance R = 0.71–0.75 mm): EDGE held for 27 steps
+(distance 0.36–0.44 mm), CORNER acquired at 0.70 mm, held while the cursor moved away to 1.35 mm
+(< 2 R), SURFACE on the side face, EDGE on the way back, CORNER acquired at 0.63 mm and held to
+1.47 mm, then EDGE again. No alternation at any step.
 
 Screenshots: `images/corner_snap.png`, `images/edge_snap.png`; the demo GIF shows the full flow.
 
-## Complexity and cost
+## Complexity and cost (index; feature graph above)
 
 - **Index build**: one pass over the file (`array('f')` of coordinates, chunks of 65 536
   triangles), one pass to assign each triangle to the cells its bounding box covers. O(N) once per

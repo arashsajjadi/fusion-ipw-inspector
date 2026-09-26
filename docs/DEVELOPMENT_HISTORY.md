@@ -94,6 +94,41 @@ group the changes by topic. The order in which things were actually done:
 10. This file, the version bump to 0.3.0 and the tag, then the release ZIP was built, installed
     from the ZIP and re-tested before publishing.
 
+## v0.4.0 — 2026-09-26 14:00 to 15:30, grouped commits plus release commits
+
+Goal: make hovering feel instantaneous and magnetic on the real Setup5 stock, without touching
+the validated acquisition, transform and export core. One continuous session; commits created at
+the end, grouped by topic. The actual order:
+
+1. **Profiling first.** Every stage of the 0.3.0 hover pipeline was timed inside Fusion with a
+   continuous cursor sweep: 17.7 ms per event (local reconstruction 4.6 ms, marker delete and
+   recreate 5.7 ms, viewport refresh 7.2 ms), the pipeline saturated at 56 events per second, and
+   Fusion's own cost per event outside the handler was small. So the display mesh was not the
+   problem; the per-hover work was.
+2. **Feature graph** (`core/features.py`): cell-plane clustering, union-find merge into patches,
+   edges and corners from adjacency, coarse-cell lookup. Benchmarked offline on the real stock,
+   then tuned: triangles that span several cells were being counted several times (fixed), the
+   per-pair face-width test cost 4.4 s (replaced by a per-patch covariance), fillet strips made
+   spurious edges (faces must be three cells wide across an edge). 1 056 corners, 2 555 edges,
+   query 0.28 ms.
+3. **Ray cast and magnetic tracker**: `MeshIndex.raycast`, `MagneticTracker`, geometric keys for
+   the local fallback, unit tests.
+4. **Controller and dialog**: hovering from `mouseMove` through the ray cast, clicks from
+   `mouseUp` committed from an idle event, the display mesh non-selectable, persistent marker
+   groups, Show IPW checkbox, startup and hover timing logs.
+5. **Bugs found while testing in Fusion**: without an explicit viewport refresh the moved marker
+   was not repainted (repaints are now throttled to 60 Hz with a deferred repaint); a light-bulb
+   change inside the dialog's event did not stick (applied from an idle event); the overlay still
+   pre-highlighted because the preSelect handler accepted it (now rejected there); the exporter's
+   housekeeping deleted the cache file next to the STL on every export; the STL fingerprint changed
+   on every export because Fusion leaves the attribute bytes undefined (now masked); the cache
+   pickled class instances under Fusion's mangled module name (now plain data); a 10 mm tolerance
+   step forgot the unit conversion (tolerance was 0.07 mm for a while).
+6. **Measured on the installed build**: per event 2.3 ms median, 7.6 ms p95; 170 events per
+   second sustained; six picks on the tab corners, edge and face exact to 0.0007 mm (0.0043 mm on
+   the tessellated underside); magnetic hold recorded step by step; Show IPW on/off in 5–15 ms;
+   17/17 analytic checks, 79 unit tests, 0 leftovers after close.
+
 ## Conventions from here on
 
 Granular conventional commits as work happens (`fix(ui): …`, `feat(snap): …`, `test(…): …`,

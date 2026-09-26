@@ -4,6 +4,41 @@ All notable changes to Fusion IPW Inspector are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] - 2026-09-26
+
+Interaction made instantaneous and smooth on the real 829 000-triangle Setup5 stock. The
+acquisition, WCS transform and export core are unchanged; all 0.3.0 accuracy tests still pass.
+
+### Added
+- Precomputed feature graph per stock (`core/features.py`): planar patches, edges and corners
+  extracted once in the background (4.25 s), stored in coarse cells and cached next to the
+  exported stock (`.snapcache`, loads in 0.16 s). A hover now looks up cached candidates instead
+  of reconstructing planes from triangles; the local reconstruction remains as the fallback while
+  the graph is building. Both corners of one face share the same fitted planes.
+- Own ray cast on the analysis mesh (grid traversal, 0.03 ms): hovering and clicking go through
+  `mouseMove`/`mouseUp`, the display mesh is non-selectable and Fusion no longer hit-tests or
+  highlights the 829 000-triangle body.
+- Magnetic tracker: features acquired within the tolerance are held until two tolerances away;
+  higher-priority features take over within the tolerance; no alternation on tiny motion.
+- **Show IPW** checkbox: hides/shows the stock overlay in a few milliseconds without touching the
+  snap data or the model.
+- Per-stage hover profile in the diagnostics log on close; startup timings (export, import,
+  dialog, index, features, cache).
+- 27 new unit tests (feature graph, ray cast, plain-data cache state, magnetic tracker).
+
+### Changed
+- The hover marker is a set of persistent custom-graphics groups moved through their transforms;
+  nothing is deleted or recreated per hover, and viewport repaints are limited to 60 Hz.
+- Per-hover cost on the watch case: 17.7 ms → 2.3 ms median (7.6 ms p95 including the repaint);
+  the pipeline sustains 170 events per second instead of saturating at 56.
+- The stock fingerprint ignores the STL attribute bytes Fusion leaves undefined, and the cache
+  file survives re-exports, so unchanged stock reuses its index and features across sessions.
+- Status line says *Preparing IPW…* while the index is still being built.
+
+### Fixed
+- The screen tolerance was quantised by integer pixel coordinates (it flipped between 0.71 and
+  0.75 mm); it is now measured over a 10 mm step.
+
 ## [0.3.0] - 2026-09-26
 
 Product-quality pass on interaction, lifecycle and documentation. The validated
