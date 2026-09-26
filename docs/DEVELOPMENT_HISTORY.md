@@ -129,6 +129,14 @@ the end, grouped by topic. The actual order:
    the tessellated underside); magnetic hold recorded step by step; Show IPW on/off in 5–15 ms;
    17/17 analytic checks, 79 unit tests, 0 leftovers after close.
 
+## v0.4.1 — 2026-09-26, one fix found right after publishing 0.4.0
+
+The release-ZIP acceptance screenshots still showed the stock tinted while hovering. The
+overlay was non-selectable and rejected in `preSelect`, but the pick input's `MeshBodies`
+selection filter alone makes Fusion pre-highlight matching bodies. With model selection off the
+input now carries a filter that never matches the stock; the overlay keeps its shading and Fusion
+does no per-move work on it. Verified on the installed build, then released as 0.4.1.
+
 ## Conventions from here on
 
 Granular conventional commits as work happens (`fix(ui): …`, `feat(snap): …`, `test(…): …`,

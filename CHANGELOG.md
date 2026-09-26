@@ -4,6 +4,15 @@ All notable changes to Fusion IPW Inspector are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## [0.4.1] - 2026-09-26
+
+### Fixed
+- Fusion still tinted the whole stock overlay while the cursor was over it: the pick input's
+  `MeshBodies` filter made Fusion pre-highlight the body even though it was not selectable. With
+  model selection off the input now uses a filter that never matches the stock, so the overlay
+  keeps its normal shading while hovering and Fusion does no per-move work on the 829 000-triangle
+  body at all.
+
 ## [0.4.0] - 2026-09-26
 
 Interaction made instantaneous and smooth on the real 829 000-triangle Setup5 stock. The

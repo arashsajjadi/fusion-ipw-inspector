@@ -36,7 +36,7 @@ the vertex; the cyan cross marks the reconstructed corner, the cyan line the rec
 
 Windows, about two minutes, no administrator rights.
 
-1. Download `FusionIPWInspector-v0.4.0.zip` from the
+1. Download `FusionIPWInspector-v0.4.1.zip` from the
    [releases page](https://github.com/arashsajjadi/fusion-ipw-inspector/releases).
 2. Extract it. You get a folder `FusionIPWInspector` containing `FusionIPWInspector.py` and
    `FusionIPWInspector.manifest`.
@@ -235,7 +235,7 @@ complexity analysis.
 Fusion behaviours that shape the command: graphics drawn in `executePreview` are discarded before
 the next preview and may survive the command's end, so every group is tagged and swept once the
 dialog has closed; a preview requested from inside a hover event cancels the click that follows;
-the stock overlay must be rejected in `preSelect` or Fusion pre-highlights it on every move; and
+the stock overlay must be rejected in `preSelect` and left out of the selection filter, or Fusion pre-highlights it on every move; and
 a light-bulb change made inside the dialog's own event does not stick, so **Show IPW** is applied
 from an idle event. Document changes (acquisition, reference points) run in a dialog-less command
 after which the dialog reopens with its state.
