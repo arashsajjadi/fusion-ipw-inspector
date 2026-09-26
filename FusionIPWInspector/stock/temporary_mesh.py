@@ -128,4 +128,21 @@ class TemporaryMesh:
             mesh.name = body_name
         except Exception:
             pass
+        _style(mesh)
         return occ, mesh
+
+
+def _style(mesh: adsk.fusion.MeshBody) -> None:
+    """Calm display: no triangle edges, slightly translucent so the model shows through.
+
+    Both settings are display-only properties of the temporary body and are
+    removed with it. Failures are ignored (older builds may lack the overrides).
+    """
+    try:
+        mesh.displayOverrides.isSuppressTriangleEdges = True
+    except Exception as exc:
+        log.info('mesh display override not available: %s' % exc)
+    try:
+        mesh.opacity = 0.85
+    except Exception as exc:
+        log.info('mesh opacity not available: %s' % exc)
