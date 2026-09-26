@@ -495,6 +495,7 @@ class _Session:
             occ, mesh = self.stock.mesh_occurrence(self.doc)
             if mesh is not None:
                 mesh.isSelectable = False
+                log.info('stock overlay configured: selectable=%s' % mesh.isSelectable)
             if occ is not None and occ.isLightBulbOn != self._ipw_visible:
                 occ.isLightBulbOn = self._ipw_visible
         except Exception as exc:
@@ -593,7 +594,9 @@ class _Session:
         allow_model = adsk.core.BoolValueCommandInput.cast(self.inputs.itemById(IN_PICK_MODEL))
         model_ok = bool(allow_model and allow_model.value) or self.result is None or not self.result.mesh_body_valid
         pick.clearSelectionFilter()
-        for f in (MODEL_FILTERS if model_ok else ('MeshBodies',)):
+        # With model selection off nothing is meant to be selectable: a filter that never matches the
+        # stock keeps Fusion from pre-highlighting the 829k-triangle body on every mouse move.
+        for f in (MODEL_FILTERS if model_ok else ('ConstructionPoints',)):
             pick.addSelectionFilter(f)
 
     # ------------------------------------------------------------ drawing
