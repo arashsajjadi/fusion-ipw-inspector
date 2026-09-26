@@ -6,7 +6,7 @@
     "description": {
         "": "Inspect Fusion in-process stock and read X, Y, Z coordinates relative to any Manufacturing Setup WCS."
     },
-    "version": "0.2.0",
+    "version": "0.3.0",
     "runOnStartup": true,
     "supportedOS": "windows|mac",
     "editEnabled": true
