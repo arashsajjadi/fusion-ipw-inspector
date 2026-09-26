@@ -53,14 +53,30 @@ def _safe_name(text: str) -> str:
 
 
 def _file_fingerprint(path: str) -> str:
+    """Content fingerprint of a stock file, insensitive to what Fusion leaves undefined.
+
+    Fusion's binary STL export writes identical normals and vertices for an
+    unchanged stock but uninitialised 2-byte attribute fields, so those bytes
+    are zeroed before hashing (an extended slice assignment on a bytearray, so
+    the whole 40 MB file hashes in well under a second). The same stock then
+    keeps its fingerprint across exports, which is what lets the snap cache be
+    reused across dialog sessions and Fusion restarts.
+    """
     h = hashlib.sha1()
-    h.update(str(os.path.getsize(path)).encode())
     with open(path, 'rb') as fh:
-        while True:
-            chunk = fh.read(1 << 20)
-            if not chunk:
-                break
-            h.update(chunk)
+        data = bytearray(fh.read())
+    h.update(str(len(data)).encode())
+    if len(data) >= 84 and not (data[:5].lower() == b'solid' and b'facet' in data[:4096]):
+        count = int.from_bytes(data[80:84], 'little')
+        end = 84 + count * 50
+        if end <= len(data):
+            zeros = bytes(count)
+            data[132:end:50] = zeros      # first attribute byte of every record (offset 48 within the record)
+            data[133:end:50] = zeros      # second attribute byte
+            h.update(data[:80] + data[84:end])
+            h.update(data[end:])
+            return h.hexdigest()[:16]
+    h.update(data)
     return h.hexdigest()[:16]
 
 
@@ -131,7 +147,9 @@ class PostStockProvider:
         os.makedirs(out_dir, exist_ok=True)
         base = 'ipw_%s_%d' % (_safe_name(setup.name), setup.operationId)
         for old in os.listdir(out_dir):
-            if old.startswith(base):
+            # Previous exports of this setup are replaced; the snap cache next to them stays
+            # (it carries the stock fingerprint and is reused when the re-export is identical).
+            if old.startswith(base) and not old.endswith('.snapcache'):
                 try:
                     os.remove(os.path.join(out_dir, old))
                 except OSError:
