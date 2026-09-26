@@ -1,232 +1,241 @@
 # Fusion IPW Inspector
 
-Inspect Fusion in-process stock and read X, Y, Z coordinates relative to any Manufacturing Setup WCS.
-
-Click a point on the remaining stock (or the model) in the Manufacture workspace and read where it is
-in the work coordinate system of the setup you choose, for example the rotary setup that comes next.
-Copy the numbers, or drop a reference point there. Nothing else to configure.
+Click a point on the in-process stock of any Manufacturing Setup and read its X, Y, Z in that
+setup's work coordinate system. One button, no export dialogs.
 
 ![IPW Inspector dialog](docs/images/dialog.png)
 
-## Install (about one minute)
+1. Open the Manufacture workspace and click **IPW Inspector** (Inspect panel, next to Measure).
+2. The in-process stock of the active setup appears in the viewport. Click a point on it.
+3. Read X, Y, Z. They are relative to the WCS of the setup in the dropdown.
 
-1. Download the latest ZIP from the releases page (or clone this repository).
-2. Extract it and copy the `FusionIPWInspector` folder into your Fusion add-ins folder:
+That is the whole workflow. Copy the values, copy them as `X.. Y.. Z..`, or drop a reference
+point. Switching the setup re-reads the stock for that setup and re-expresses the picked
+point in its WCS.
+
+![Picked point on a leftover tab of a rotary setup](docs/images/marker.png)
+
+## Install
+
+1. Download the ZIP from the [releases page](https://github.com/arashsajjadi/fusion-ipw-inspector/releases) (or clone).
+2. Copy the `FusionIPWInspector` folder into the Fusion add-ins folder:
 
    | OS      | Folder |
    |---------|--------|
    | Windows | `%APPDATA%\Autodesk\Autodesk Fusion 360\API\AddIns\` |
    | macOS   | `~/Library/Application Support/Autodesk/Autodesk Fusion 360/API/AddIns/` |
 
-   The result must be `...\AddIns\FusionIPWInspector\FusionIPWInspector.py` (plus the `.manifest`).
-3. Restart Fusion (or open **Utilities > Add-Ins > Scripts and Add-Ins**, select *FusionIPWInspector*, click **Run**).
-4. Open the **Manufacture** workspace. The **IPW Inspector** button is in the **Inspect** panel, next to Measure.
+   The result must be `...\AddIns\FusionIPWInspector\FusionIPWInspector.py`.
+3. Restart Fusion, or open **Utilities > Add-Ins > Scripts and Add-Ins**, select *FusionIPWInspector*, click **Run**.
+4. Open **Manufacture**. The button is in the **Inspect** panel of every Manufacture tab.
 
-Windows users can instead run the optional installer from the extracted folder (no administrator rights needed):
+Windows users can run the optional installer from the extracted folder instead (no administrator rights):
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-`install.ps1 -Uninstall` removes it again. No Python packages, no network access, no admin rights.
+`install.ps1 -Uninstall` removes it. No Python packages, no network access, no admin rights.
 
-## Use
+## What you see
 
-1. Activate (or just select) the Setup whose WCS you want the numbers in.
-2. Click **IPW Inspector**.
-3. Click a point on the remaining stock, the model, a face, an edge or a point.
-4. Read X, Y, Z. They are relative to the WCS of the setup shown in the **Setup** dropdown.
+- **Setup** – which WCS the numbers are in. Defaults to the active setup, else the selected one.
+- **Current IPW ✓ Setup5** – the source line. It is one of *Current IPW* (read from Fusion just
+  now), *Saved IPW* (a file you saved from Simulation) or *No IPW available* (with the reason).
+- **X / Y / Z** and, below them, `on IPW` or `on model` so you always know what you clicked.
+  Readings on the IPW carry the simulation-resolution note; readings on model geometry are exact.
+- **Copy XYZ** copies `12.384<tab>-21.750<tab>6.125`; **Copy G-code** copies `X12.384 Y-21.750 Z6.125`.
+- **Advanced** – display unit (document unit, mm or inch), WCS triad, *Also pick model
+  geometry*, *Create reference point*, *Refresh IPW*, *Load saved stock…*, *Remove IPW mesh*,
+  the WCS description, the diagnostics log switch and *Run self test*.
 
-![Picked point marker in the viewport](docs/images/marker.png)
+Units follow the document (3 decimals in mm, 4 in inches), with an explicit sign and never `-0.000`.
 
-- **Setup** - change it any time; the reading and the WCS triad update immediately.
-- **Copy XYZ** - copies `12.384	-21.750	6.125` (tab separated).
-- **Copy as X.. Y.. Z..** - copies `X12.384 Y-21.750 Z6.125` for a controller or a probing cycle.
-- **Create reference point** - adds a construction point at the picked location, named with its coordinates,
-  so it survives closing the dialog.
-- **Load saved stock...** - loads the stock you saved from Simulation (see below) as a temporary mesh you can click on.
-- **Advanced** - display unit (document unit, mm or inch), WCS triad on/off, remove the temporary stock,
-  diagnostics log. You normally never need it.
+While an IPW is loaded only the IPW can be picked: Fusion prefers solid bodies over meshes when
+both are under the cursor, and a modelled tab 0.05 mm below the real stock would otherwise be
+reported as the stock. Tick *Also pick model geometry* when you want a model reference.
 
-Units follow the document (3 decimals in mm, 4 in inches). Values are shown with an explicit sign and never a `-0.000`.
+## How the in-process stock gets there
 
-### Getting the in-process stock into the viewport
+Fusion still has no public API call that returns the in-process stock (checked against build
+2.0.2705x; the full investigation with 40 avenues is in [docs/RESEARCH.md](docs/RESEARCH.md)).
+It does, however, export the setup stock and the part as STL for any post processor that asks
+for them (`this.exportStock = true`), the same documented mechanism the shipped CAMplete
+machine-simulation post relies on. For a *From preceding setup* setup that stock **is** the
+in-process stock.
 
-Fusion shows the simulated remaining stock, but its public API does not expose it (verified against Fusion
-2.0.2705x, September 2026, see *Compatibility* below). The only supported way out of Fusion is Simulation's own
-**Save Stock**, which writes an STL. IPW Inspector needs that file once per setup; everything after that is automatic:
+So the add-in ships a tiny post (`resources/post/ipw_inspector_stock.cps`) that writes no NC
+code. When you click the button it installs that post into your personal post folder if it is
+missing, creates a temporary NC program for the setup, posts it into the add-in's cache folder,
+reads the exported stock, deletes the NC program again (all of that is a single undo step), and
+imports the stock as a component named **"IPW Inspector temporary stock (not saved, safe to
+delete)"** placed with the setup's WCS. The export takes about 0.3 s; importing an 830 000-triangle
+stock takes 1.5 s. Unchanged stock is reused without re-import. The temporary component is removed
+before the document is saved, when the add-in stops, or with *Remove IPW mesh*.
 
-1. Select the setup that uses the stock (for example Setup 2, *From preceding setup*) and click **Simulate**.
-   At the start of the simulation the stock shown *is* the in-process stock left by the preceding setups.
-2. Right-click the stock in the viewport, choose **Stock > Save Stock...**, save the STL anywhere.
-3. Exit Simulation, open **IPW Inspector**, click **Load saved stock...** and pick the file.
+Two things Fusion requires, both reported in the dialog when they are missing:
 
-The add-in reads the file, works out its unit and coordinate frame by checking that the stock encloses the setup's
-model (STL has no unit; Fusion writes millimetres in world coordinates and this is verified rather than assumed),
-imports it as a component named **"IPW Inspector temporary stock (safe to delete)"** and reports what it did in the
-dialog. From then on just click on it. The temporary component is removed when you click **Remove temporary stock**,
-when the add-in stops, or if you delete it yourself. Loading the same, unchanged file again is instant.
+- the setup must contain at least one generated operation (Fusion computes the incoming stock
+  of a *From preceding setup* setup when its operations are generated);
+- setups created through the API with `stockMode = PreviousSetupStock` alone lack the
+  `job_continueMachining` flag the Setup dialog sets, and export the raw box. Re-select *From
+  preceding setup* in the Setup dialog to fix such a setup. Setups made in the UI are fine.
 
-If you only need model geometry (a finished face, a corner, a tab modelled as a body), skip the stock file: any
-clickable geometry gives a reading.
+Fallbacks, in order: a stock file that appears in your last Save Stock folder while the dialog is
+open (Windows change notification, no polling), or *Load saved stock…* under Advanced. Files are
+checked for unit, containment of the model and scale before they are used.
 
 ## What the numbers mean
 
-`Setup.workCoordinateSystem` gives the setup's WCS as a 4x4 matrix: its three columns are the setup X, Y, Z axes in
-world space and its translation is the WCS origin, in **millimetres regardless of document units** (checked by
-switching a test document to inches: the matrix does not change). The picked point comes from Fusion's viewport
-selection in world space (centimetres, the API's internal unit). The add-in converts both to millimetres and applies
+`Setup.workCoordinateSystem` is the setup-to-world matrix; its translation is in millimetres
+regardless of document units (verified by switching a test document to inches). The picked point
+comes from Fusion's viewport selection in world space. The add-in applies
 
 ```
-p_setup = R^T * (p_world - origin)
+p_setup = Rᵀ · (p_world − origin)
 ```
 
-that is, world to setup, never the other way around. The matrix is validated to be a proper right-handed rigid
-transform before it is used; a scaled or mirrored matrix is refused with a message instead of producing wrong numbers.
-
-The coordinate frames Fusion has, and which one you get:
-
-| Frame | Used for |
-|-------|----------|
-| Design / world | where the picked point comes from and where the stock file is placed |
-| Component | not involved (selection points are already in world space) |
-| **Setup WCS** | **what is displayed** |
-| Machine coordinates, tool orientation, rotary axis | not involved; the WCS is what the post outputs relative to |
-
-For rotary setups the WCS is simply a WCS whose X (or Y) axis happens to be the rotary axis; no special handling
-is needed and none is done.
-
-### Accuracy
-
-- Points picked on model geometry are exact.
-- Points picked on a saved stock mesh are as accurate as the simulation that produced it (its **Accuracy** setting
-  and the STL tessellation). The dialog says "Simulation stock: accuracy depends on simulation resolution" whenever
-  the reading comes from a mesh. Three decimals in millimetres are shown because that is what you type into a
-  controller; do not read more into the last digit than the simulation resolution supports.
+after validating that the matrix is a proper right-handed rigid transform (a scaled or mirrored
+matrix is refused with a message). Machine coordinates, tool orientation and rotary axes are not
+involved: for a rotary setup the WCS is simply a WCS whose X (or Y) axis happens to be the rotary
+axis, and the readings are what the post outputs relative to.
 
 ## Verified results
 
-The transform was checked with known geometry inside Fusion 2.0.2705x. World-space picks were taken from the
-add-in's diagnostics log and the expected values were computed by hand from the setup WCS matrices.
+Independent checks, all on this Fusion build:
 
-| Case | Setup WCS (origin mm; axes) | Picked world point (mm) | Expected setup XYZ (mm) | Displayed |
-|------|-----------------------------|-------------------------|-------------------------|-----------|
-| A - WCS at world origin | (0, 0, 0); X=+X, Y=+Y, Z=+Z | (12.263, 30.000, 8.856) | (12.263, 30.000, 8.856) | +12.263 / +30.000 / +8.856 |
-| B - translated (Setup3) | (22, -25.15, 11.822); world axes | (-0.040, 0.684, 10.000) | (-22.040, 25.834, -1.822) | -22.040 / +25.834 / -1.822 |
-| C - flipped, rotated 180 about X (Setup2) | (22, 25.15, -13.378); X=+X, Y=-Y, Z=-Z | (-0.040, 0.684, 10.000) | (-22.040, 24.466, -23.378) | -22.040 / +24.466 / -23.378 |
-| C' - translated to stock centre | (20, 15, 10.5); world axes | (12.263, 29.999, 8.856) | (-7.737, 14.999, -1.644) | -7.737 / +14.999 / -1.644 |
-| D - rotary (Setup5: X = world +Z, Y = world -Y, Z = world +X) | (0, 0, -0.778) | (-0.040, 0.684, 10.000) | (10.778, -0.684, -0.040) | +10.778 / -0.684 / -0.040 |
-| D - rotary, second pick | as above | (-2.877, -2.731, 10.000) | (10.778, 2.731, -2.877) | +10.778 / +2.731 / -2.877 |
-| Inch display of C' | as above | as above | (-0.3046, 0.5905, -0.0647) in | -0.3046 / +0.5905 / -0.0647 |
+**Analytic job** (`tools/validate_in_fusion.py`, 17 checks, all pass): a 40 x 30 x 20 mm block with
+a 20 x 10 x 8 mm pocket, Setup 1 clears it with a 4 mm end mill, Setup 2 uses the preceding stock
+with its WCS at the stock's top corner (−1, −1, 21). The exported IPW has the pocket floor at
+z = 12.000 (analytic 20 − 8), the outline at the model box (x 0..40, y 0..30, z 0..20.035), the
+exported part matches the model box within 0.0000 mm, the placed mesh's transform equals the
+setup WCS exactly, and the world→setup→world round trip is exact.
 
-The picked world points are the top face of the design's centre island (Z = 10.000 mm exactly), so every Z in
-setups B and C and every X in setup D is also checked against known geometry, not only against the transform.
-Cases B, C and D were also checked by switching the Setup dropdown with the same pick held; the reading updated
-to the values above each time.
+**Real watch-case job** (Setup3 fixed box, Setup2 flipped 180° about X, Setup5 rotary with X along
+world +Z). Readings are compared with Fusion's own stock file for the setup, which Fusion writes
+in the setup WCS without any add-in transform involved:
 
-Cases C, D and B come from a real four-setup watch-case job (the rotary setup is the one from the motivating
-use case); cases A and C' come from a generated test document with a 40 x 30 x 20 mm block. The same block exported
-to STL and loaded through **Load saved stock...** was detected as "mm, world coordinates" and a click on the mesh
-returned the same point as a click on the solid face underneath it (Y = 30.000 exactly). The pure-Python unit tests
-(`FusionIPWInspector/tests`) cover the same cases plus rejection of invalid matrices, formatting, and the stock-file
-unit/frame inference (mm, cm, inch, world frame, setup frame, wrong file).
+| Pick | Displayed (Setup5 WCS, mm) | Fusion's stock file | Agreement |
+|------|----------------------------|---------------------|-----------|
+| top of a leftover tab | +2.078 / −19.235 / +18.988 | tab plane X = 2.0776 | exact on the plane |
+| island top | +10.828 / −1.058 / +0.811 | island plane X = 10.8276 | exact on the plane |
+| stock side face | −0.002 / +4.818 / +15.143 | vertex (−0.0019, 4.8178, 15.1427) | 0.000 mm |
+| stock end face | −2.944 / −23.587 / −22.000 | end plane Z = −22.0 | exact on the plane |
+| island top (model geometry) | +10.778 / −0.684 / −0.040 | world z = 10.000 → X = 10.7776 | exact |
+| same pick in Setup2 | −22.040 / +24.466 / −23.378 | hand computation | exact |
+| same pick in Setup3 | −22.040 / +25.834 / −1.822 | hand computation | exact |
 
-Run the tests with any Python 3:
+The stock file's bounding box in the Setup5 frame is x −12.600..10.828, y −25.150..25.157,
+z −22.000..22.000, so the tabs (X ≈ 2.08) and the island (X ≈ 10.83) are where a machinist would
+touch off: 10.83 mm above the raw stock centre along the rotary axis, 20 mm out radially.
+
+**Pure-Python unit tests** (32, run anywhere):
 
 ```bash
 python -m unittest discover -s FusionIPWInspector/tests -v
 ```
 
+**Self test** inside Fusion (Advanced > Run self test, or the hidden command *IPW Inspector Self
+Test*): transform cases A–D, unit conversion, rejection of bad matrices, every setup's WCS, and
+for the loaded stock: readable, scale plausible, encloses the model, orientation of the exported
+part within 0.007 mm, fits the setup stock box.
+
+Also exercised: setup switching with a held pick, Copy XYZ, Copy G-code, reference point, remove
+mesh, a wrong stock file (rejected with the reason, the current IPW kept), cancel with Escape,
+document close, add-in unload and reload.
+
 ## Architecture
 
 ```
 FusionIPWInspector/
-  FusionIPWInspector.py       entry point: run()/stop()
-  FusionIPWInspector.manifest
+  FusionIPWInspector.py         run()/stop(): toolbar button, commands, save hook
   commands/
-    inspector_command.py      the dialog: setup dropdown, pick, readout, buttons
-    actions_command.py        document changes (load/remove stock, reference point) as committed actions
-  core/
-    setup_transform.py        SetupFrame: WCS matrix -> world->setup transform (pure Python)
-    point_inspector.py        InspectedPoint: formatting, units, copy formats (pure Python)
-    stock_file.py             STL reading, unit + frame inference (pure Python)
-    ipw_provider.py           acquisition: temporary stock component, cache, cleanup (Fusion API)
-  ui/
-    toolbar.py                the one button in Manufacture > Inspect
-    markers.py                viewport crosshair, label and WCS triad (custom graphics)
-  utils/                      logging, preferences, clipboard, unit conventions
-  resources/                  icons
-  tests/                      unit tests, no Fusion required
+    inspector_command.py        the dialog
+    actions_command.py          document changes as one undo step, dialog resume
+    self_test_command.py        hidden self test
+  core/                         pure Python, no Fusion imports
+    transform.py                SetupFrame: WCS matrix -> world/setup transform
+    point_inspector.py          readings, rounding, copy formats
+    stock_file.py               STL reading, unit and frame inference
+  stock/
+    provider.py                 StockResult, source constants
+    post_export.py              PostStockProvider (primary)
+    saved_file.py               SavedStockProvider + FolderWatcher (fallback)
+    temporary_mesh.py           the tagged temporary component
+    mesh_validation.py          sanity checks (pure Python)
+    acquisition.py              per-document session, provider chain, save hook
+  ui/                           toolbar.py, marker.py (custom graphics)
+  diagnostics/                  log.py (quiet by default), self_test.py
+  utils/                        prefs.py, clipboard.py, fusion_units.py
+  resources/                    icons, post/ipw_inspector_stock.cps
+  tests/                        unit tests
+tools/validate_in_fusion.py     analytic validation script (run inside Fusion)
 ```
 
-The layers are deliberately separated: `setup_transform` and `point_inspector` know nothing about how the stock was
-obtained, so if Autodesk exposes the in-process stock directly one day only `ipw_provider` needs replacing.
+The transform never depends on how the stock was obtained. Providers only produce a
+`StockResult` and a placed mesh, so a future direct API accessor replaces `stock/post_export.py`
+and nothing else.
 
-Two Fusion behaviours shaped the command design and are worth knowing if you change it:
-
-- Anything created while a command dialog is open (custom graphics, imported bodies) belongs to that command's
-  transaction. Graphics are therefore drawn in `executePreview`, and document changes are run after the dialog
-  closes (through a custom event and a dialog-less helper command) and the dialog reopens where it was.
-- `ConstructionPointInput.setByPoint` accepts a bare point only in direct-modelling designs. In parametric designs
-  the reference point is anchored to a sketch point in a sketch named "IPW Inspector reference points".
+Two Fusion behaviours shape the command design: graphics and document changes made inside a
+dialog's `inputChanged` are discarded, so graphics are drawn in `executePreview` and document
+changes run in a dialog-less command after which the dialog reopens with its state; and
+`ConstructionPointInput.setByPoint` accepts a bare point only in direct-modelling designs, so
+reference points are anchored to a sketch point (one sketch collects them). No workspace switch,
+no camera change.
 
 ## Compatibility and stability
 
 | Part | Status |
 |------|--------|
-| Setup WCS transformation (`Setup.workCoordinateSystem`, `Selection.point`) | **Stable**, documented public API |
-| Point coordinate inspection, copy, reference point | **Stable**, documented public API |
-| Temporary stock import (`MeshBodies.add` in a base feature) | **Stable**, documented public API |
-| Toolbar placement in panel `CAMInspectPanel` | Panel id of the Manufacture workspace; falls back to a plain button if the panel moves |
-| Save Stock | Fusion's own UI (Simulation context menu). It is **not** scriptable: no command definition exists for it in this build, and the simulation ends as soon as a script runs. The add-in never relies on undocumented command ids or UI automation. |
+| Setup WCS transform, point readings, copy, reference point | Stable, documented public API |
+| Stock export through the post engine (`this.exportStock`, `autodeskcam:stock-path`, `NCPrograms`) | Documented post-processor and API behaviour; the helper post is versioned and reinstalled when it changes |
+| Temporary mesh import (`MeshBodies.add` in a base feature) | Stable, documented public API |
+| Toolbar placement in panel `CAMInspectPanel` | Falls back to a plain button if the panel moves |
+| Folder watcher | Win32 change notifications; macOS falls back to manual loading |
 
-Tested on Fusion 2.0.2705x (build 2705.1.15, September 2026) on Windows 11 with the bundled Python 3.14.
-The manifest allows macOS; the clipboard uses `pbcopy` there. No external Python packages are used.
-
-### What was checked about direct IPW access
-
-The public CAM API of this build (`adsk.cam`) has no property or method that returns the in-process or simulated
-stock: `Setup` exposes `stockMode`, `stockSolids` (only for *From solid* stock), `models`, `workCoordinateSystem` and
-parameters; `GeneratedDataType` covers additive results only; the command definitions related to stock
-(`IronGenerateStock`, `IronInProcessStockDisplay`, `IronAutomaticIPSGeneration`, `IronClearIPSCache`,
-`SimulationStockToModel`) drive display features, not data access, and Save Stock has no command definition at all.
-When Autodesk adds an accessor, replace `core/ipw_provider.py`.
+No undocumented command ids and no UI automation are used. Tested on Fusion 2.0.2705x
+(2705.1.15) on Windows 11 with the bundled Python 3.14, on a 3440 x 1440 display. The dialog is a
+native Fusion command dialog, so it docks where Fusion puts its own dialogs; no separate windows
+are created.
 
 ## Known limitations
 
-- The in-process stock has to be saved once from Simulation (**Stock > Save Stock...**) and loaded with one click.
-  Everything else (unit, placement, cleanup) is automatic.
-- Readings on a saved stock are limited by the simulation resolution; readings on model geometry are exact.
-- Loading the stock and creating a reference point briefly close and reopen the dialog (Fusion requires document
-  changes to happen outside the dialog). Your setup choice, unit choice and last pick are kept.
-- Only one temporary stock is kept per document at a time; loading another replaces it.
-- The picked location is the exact viewport hit under the cursor, not a snapped feature. Use Fusion's snapping
-  (vertices, sketch points, construction points are all pickable) when you need a specific feature.
+- The stock comes from Fusion's in-process stock computation at simulation resolution (the Setup's
+  stock accuracy). Readings on it are labelled accordingly; model readings are exact.
+- A setup without a generated operation has no in-process stock to export. Add or generate one.
+- Loading the stock and creating a reference point briefly close and reopen the dialog (Fusion
+  requires document changes to happen outside the dialog). Setup, unit, pick and Advanced state
+  are kept.
+- The picked location is the exact viewport hit under the cursor, not a snapped feature. Turn on
+  *Also pick model geometry* and use vertices, sketch or construction points when you need a
+  snapped reference.
+- Turning setups with *From preceding setup* have not been tested.
 
 ## Troubleshooting
 
-- **No "IPW Inspector" button.** Check that the folder is
-  `...\AddIns\FusionIPWInspector\FusionIPWInspector.py`, then Utilities > Add-Ins > Scripts and Add-Ins > select it > Run
-  (tick *Run on Startup*). The button lives in the Manufacture workspace only.
-- **"This document has no Manufacture data yet."** Create a Setup first.
-- **The loaded stock is somewhere else or the wrong size.** The dialog says how the file was read
-  (for example "mm, world coordinates"). If it reports that the stock does not enclose the model, the file is probably
-  from another setup or another design.
-- **Fusion could not import the stock mesh.** Save the stock again as STL from Simulation; OBJ/3MF from other tools
-  work too but STL from Fusion is the tested path.
-- **Diagnostics.** Advanced > Diagnostics log writes `%LOCALAPPDATA%\FusionIPWInspector\diagnostics.log`
-  (`~/Library/Application Support` is not used on macOS; the log goes to your home folder). Errors are always logged.
+- **No button.** Check the folder name and that the add-in is running (Utilities > Add-Ins). The
+  button exists only in the Manufacture workspace.
+- **"No IPW available: … has no generated toolpath yet."** Generate at least one operation of the
+  setup, then Advanced > Refresh IPW.
+- **"Unmachined stock box."** The setup's incoming stock is the raw stock: the preceding setup has
+  no generated operations, or the setup lacks the *From preceding setup* flag (see above).
+- **"The stock export post was installed but …"** Open Manage > Post Library once so Fusion
+  rescans the personal folder, then refresh.
+- **Diagnostics.** Advanced > Diagnostics log writes `%LOCALAPPDATA%\FusionIPWInspector\diagnostics.log`;
+  errors are always logged. The cache lives in `%LOCALAPPDATA%\FusionIPWInspector\cache`.
 
 ## Privacy and safety
 
-Runs locally, makes no network requests, collects nothing. It never changes a setup, a WCS or an operation.
-The only things it creates are: the temporary stock component (tagged with an attribute so only its own components
-are ever removed), reference points you explicitly ask for, and a small preferences file in your local app data folder.
+Runs locally, makes no network requests, collects nothing. It never changes a setup, a WCS or an
+operation. It creates: one helper post in your personal post folder (a text file, safe to delete),
+a temporary NC program that is deleted within the same command, the temporary stock component
+(tagged, removed before save), reference points you ask for, and a preferences file plus a cache
+folder under your local app data.
 
 ## Contributing
 
-Issues and pull requests are welcome. Keep the core modules Fusion-free so the tests stay runnable anywhere,
-keep the dialog small, and add a row to *Verified results* if you touch the transform.
+Keep `core/` and `stock/mesh_validation.py` free of Fusion imports so the tests stay runnable
+anywhere, keep the dialog small, and add a row to *Verified results* when you touch the transform.
 
 ## License
 

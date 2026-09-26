@@ -12,7 +12,7 @@ import struct
 from dataclasses import dataclass
 from typing import Optional, Sequence, Tuple
 
-from .setup_transform import SetupFrame
+from .transform import SetupFrame
 
 Box = Tuple[Tuple[float, float, float], Tuple[float, float, float]]
 

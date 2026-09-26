@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import adsk.core
 
-from ..utils import log
+from ..diagnostics import log
 
 CAM_WORKSPACE_ID = 'CAMEnvironment'
 INSPECT_PANEL_ID = 'CAMInspectPanel'

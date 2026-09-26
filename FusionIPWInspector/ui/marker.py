@@ -12,8 +12,8 @@ from typing import Optional, Sequence
 import adsk.core
 import adsk.fusion
 
-from ..core.setup_transform import SetupFrame
-from ..utils import log
+from ..core.transform import SetupFrame
+from ..diagnostics import log
 from ..utils.fusion_units import mm_to_api
 
 ACCENT = (255, 122, 0)

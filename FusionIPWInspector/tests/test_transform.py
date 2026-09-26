@@ -14,10 +14,10 @@ import os
 import sys
 import unittest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from core.setup_transform import SetupFrame, SetupFrameError  # noqa: E402
-from core.point_inspector import InspectedPoint, format_axis_value, format_machine_line  # noqa: E402
+from FusionIPWInspector.core.transform import SetupFrame, SetupFrameError  # noqa: E402
+from FusionIPWInspector.core.point_inspector import InspectedPoint, format_axis_value, format_machine_line  # noqa: E402
 
 
 def close(a, b, tol=1e-9):

@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
-from .setup_transform import SetupFrame, Vec3
+from .transform import SetupFrame, Vec3
 
 # Display unit -> (millimetres per unit, decimals shown). Decimals reflect what
 # a machinist can use: 1 um in metric, 0.1 thou in inches. They deliberately
@@ -25,10 +25,13 @@ UNIT_TABLE = {
 # Kinds of geometry a point can be picked on. Mesh sources are approximate
 # because they come from a tessellated / simulated surface.
 SOURCE_LABELS = {
-    'mesh': 'Simulation stock (mesh)',
-    'brep': 'Model geometry',
-    'point': 'Point',
+    'ipw': 'IPW',
+    'mesh': 'mesh',
+    'model': 'model',
+    'brep': 'model',
+    'point': 'point',
 }
+APPROXIMATE_KINDS = ('ipw', 'mesh')
 
 
 def normalize_unit(unit: str) -> str:
@@ -78,7 +81,7 @@ class InspectedPoint:
     setup_xyz_mm: Vec3
     world_xyz_mm: Vec3
     setup_name: str
-    source_kind: str = 'mesh'          # 'mesh' | 'brep' | 'point'
+    source_kind: str = 'ipw'           # 'ipw' | 'mesh' | 'model' | 'point'
     source_name: str = ''              # e.g. body name
     notes: List[str] = field(default_factory=list)
 
@@ -106,7 +109,7 @@ class InspectedPoint:
         return SOURCE_LABELS.get(self.source_kind, self.source_kind)
 
     def is_approximate(self) -> bool:
-        return self.source_kind == 'mesh'
+        return self.source_kind in APPROXIMATE_KINDS
 
 
 def delta(a: InspectedPoint, b: InspectedPoint) -> Tuple[Vec3, float]:

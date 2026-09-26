@@ -10,10 +10,10 @@ import sys
 import tempfile
 import unittest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from core.setup_transform import SetupFrame  # noqa: E402
-from core.stock_file import StockFileError, infer_interpretation, read_stock_file  # noqa: E402
+from FusionIPWInspector.core.transform import SetupFrame  # noqa: E402
+from FusionIPWInspector.core.stock_file import StockFileError, infer_interpretation, read_stock_file  # noqa: E402
 
 
 def write_binary_box(path, lo, hi):
