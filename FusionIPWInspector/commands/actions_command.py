@@ -148,15 +148,10 @@ class ActionCommand:
         self.app.fireCustomEvent(REOPEN_EVENT_ID, '')
 
     def _acquire(self, doc: adsk.core.Document, setup: adsk.cam.Setup) -> None:
+        # No progress dialog here: it showed up as a blank transient window. The dialog's
+        # status line reports "Acquiring" before the action starts and "Ready" afterwards.
         session = self.sessions.for_document(doc)
-        progress = self.ui.createProgressDialog()
-        progress.isCancelButtonShown = False
-        progress.isBackgroundTranslucent = False
-        try:
-            progress.show('IPW Inspector', 'Reading the in-process stock of %s...' % setup.name, 0, 1, 0)
-            result = session.acquire_current(doc, setup)
-        finally:
-            progress.hide()
+        result = session.acquire_current(doc, setup)
         self.last_result = result
         self.last_status = ''
         log.info('acquire %s -> %s' % (setup.name, result.label()))
