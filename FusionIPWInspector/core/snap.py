@@ -71,6 +71,7 @@ class Candidate:
     distance_from_hit: float = 0.0  # mm
     direction: Optional[Vec3] = None  # edge direction (unit), for drawing
     label: str = ''
+    key: Optional[tuple] = None     # stable identity across hovers (feature id, or a geometric key)
 
     @property
     def priority(self) -> int:
@@ -327,6 +328,99 @@ def _find_equivalent(cands: Sequence[Candidate], cur: Candidate, radius: float) 
             if _dot(a.normal, b.normal) > 0.99 and abs(a.distance(b.point)) <= PLANE_OFFSET_TOL * 2:
                 return c
     return None
+
+
+def keyed(result: SnapResult, quantum: float = 0.05) -> List[Candidate]:
+    """Give locally reconstructed candidates geometric identities (rounded to ``quantum`` mm).
+
+    A corner is identified by its position, an edge by its line, a surface by
+    its plane, so the same feature found from two neighbouring hits compares
+    equal even though it was rebuilt from a different set of triangles.
+    """
+    q = 1.0 / quantum
+    for c in result.candidates:
+        if c.key is not None:
+            continue
+        if c.kind == CORNER:
+            c.key = ('lc', round(c.point[0] * q), round(c.point[1] * q), round(c.point[2] * q))
+        elif c.kind == EDGE and c.direction is not None:
+            u = c.direction
+            if (u[0], u[1], u[2]) < (0.0, 0.0, 0.0):
+                u = (-u[0], -u[1], -u[2])
+            foot = _sub(c.point, tuple(v * _dot(c.point, u) for v in u))   # closest point of the line to the origin
+            c.key = ('le', round(u[0] * 50), round(u[1] * 50), round(u[2] * 50),
+                     round(foot[0] * q), round(foot[1] * q), round(foot[2] * q))
+        elif c.kind == SURFACE and c.planes:
+            n = c.planes[0].normal
+            c.key = ('ls', round(n[0] * 50), round(n[1] * 50), round(n[2] * 50), round(c.planes[0].offset * q))
+        else:
+            c.key = ('raw',)
+    return result.candidates
+
+
+class MagneticTracker:
+    """CAD-style snapping: acquire a feature within the tolerance, hold it until the cursor
+    clearly leaves it, and never alternate between candidates on tiny cursor motion.
+
+    * A feature is acquired when it is within ``radius`` (the screen tolerance).
+    * Once acquired it is retained while the same feature (by key) is still
+      within ``retain_factor`` x radius, even if a different feature of the
+      same kind is now nearer.
+    * A higher-priority feature within the acquire radius takes over (moving
+      along an edge into a corner snaps to the corner); a same-priority feature
+      only takes over when it is within the acquire radius and clearly closer.
+    * A manually cycled choice is honoured while the feature stays within reach.
+    """
+
+    def __init__(self, retain_factor: float = 2.0, switch_factor: float = 0.5) -> None:
+        self.retain_factor = retain_factor
+        self.switch_factor = switch_factor
+        self.candidates: List[Candidate] = []
+        self.current: Optional[Candidate] = None
+        self.cycle_index = 0
+        self.manual = False
+        self.radius = 1.0
+
+    def update(self, candidates: List[Candidate], radius: float) -> Candidate:
+        """``candidates`` sorted best first (priority, then distance); returns the choice."""
+        self.candidates = candidates
+        self.radius = radius
+        retain = radius * self.retain_factor
+        cur = self.current
+        choice: Optional[Candidate] = None
+        if cur is not None:
+            same = next((c for c in candidates if c.key == cur.key and c.distance_from_hit <= retain), None)
+            if same is None:
+                self.manual = False
+            elif self.manual:
+                choice = same
+            else:
+                better = next((c for c in candidates if c.priority > same.priority and c.distance_from_hit <= radius), None)
+                if better is not None:
+                    choice = better
+                else:
+                    alt = next((c for c in candidates if c.priority == same.priority and c.key != same.key
+                                and c.distance_from_hit <= radius
+                                and c.distance_from_hit + self.switch_factor * radius < same.distance_from_hit), None)
+                    choice = alt if alt is not None else same
+        if choice is None:
+            choice = next((c for c in candidates if c.distance_from_hit <= radius), None)
+            if choice is None:
+                choice = next((c for c in candidates if c.priority <= PRIORITY[SURFACE]), candidates[-1])
+        self.current = choice
+        self.cycle_index = candidates.index(choice) if choice in candidates else 0
+        return choice
+
+    def cycle(self) -> Optional[Candidate]:
+        if not self.candidates:
+            return None
+        self.cycle_index = (self.cycle_index + 1) % len(self.candidates)
+        self.current = self.candidates[self.cycle_index]
+        self.manual = len(self.candidates) > 1
+        return self.current
+
+    def reset(self) -> None:
+        self.candidates, self.current, self.cycle_index, self.manual = [], None, 0, False
 
 
 def describe(c: Candidate) -> Dict[str, object]:
