@@ -23,12 +23,18 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $source = Join-Path $PSScriptRoot 'FusionIPWInspector'
+
+function Get-AddinVersion([string]$folder) {
+    # The manifest is JSON with an empty-string key, which ConvertFrom-Json (PowerShell 5.1) rejects.
+    $text = Get-Content -LiteralPath (Join-Path $folder 'FusionIPWInspector.manifest') -Raw
+    if ($text -match '"version"\s*:\s*"([^"]+)"') { return $Matches[1] } else { return 'unknown version' }
+}
 $addins = Join-Path $env:APPDATA 'Autodesk\Autodesk Fusion 360\API\AddIns'
 $target = Join-Path $addins 'FusionIPWInspector'
 
 if ($Uninstall) {
     if (Test-Path $target) {
-        $old = (Get-Content -LiteralPath (Join-Path $target 'FusionIPWInspector.manifest') -Raw | ConvertFrom-Json).version
+        $old = Get-AddinVersion $target
         Remove-Item -LiteralPath $target -Recurse -Force
         Write-Host "Removed Fusion IPW Inspector $old from $target"
     } else {
@@ -50,7 +56,6 @@ Copy-Item -LiteralPath $source -Destination $target -Recurse -Force
 # Byte-code caches from development are not needed in the installed copy.
 Get-ChildItem -LiteralPath $target -Recurse -Directory -Filter '__pycache__' | Remove-Item -Recurse -Force
 
-$manifest = Get-Content -LiteralPath (Join-Path $target 'FusionIPWInspector.manifest') -Raw | ConvertFrom-Json
-Write-Host "Installed Fusion IPW Inspector $($manifest.version) to $target"
+Write-Host "Installed Fusion IPW Inspector $(Get-AddinVersion $target) to $target"
 Write-Host 'Restart Fusion, open the Manufacture workspace and look for "IPW Inspector" in the Inspect panel.'
 Write-Host 'If Fusion is already running: Utilities > Add-Ins > Scripts and Add-Ins, select FusionIPWInspector, Run.'
