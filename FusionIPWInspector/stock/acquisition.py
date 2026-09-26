@@ -113,6 +113,18 @@ class StockSession:
             return False
         return TemporaryMesh(design).find_current(r.setup_id, r.fingerprint) is not None
 
+    def mesh_occurrence(self, doc: adsk.core.Document):
+        """(occurrence, mesh body) of the loaded stock, or (None, None)."""
+        r = self.result
+        _, design = self.products(doc)
+        if r is None or design is None:
+            return None, None
+        tm = TemporaryMesh(design)
+        occ = tm.find_current(r.setup_id, r.fingerprint)
+        if occ is None:
+            return None, None
+        return occ, tm.mesh_body(occ)
+
     def remove_mesh(self, doc: adsk.core.Document) -> int:
         _, design = self.products(doc)
         removed = TemporaryMesh(design).remove_all() if design is not None else 0

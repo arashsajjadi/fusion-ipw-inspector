@@ -21,6 +21,7 @@ stock again.
 from __future__ import annotations
 
 import os
+import time
 import traceback
 from typing import List, Optional
 
@@ -57,6 +58,7 @@ IN_COPY_GCODE = 'copy_gcode'
 IN_ADVANCED = 'advanced'
 IN_UNITS = 'units'
 IN_SHOW_TRIAD = 'show_triad'
+IN_SHOW_IPW = 'show_ipw'
 IN_PICK_MODEL = 'pick_model'
 IN_CREATE_POINT = 'create_point'
 IN_REFRESH = 'refresh'
@@ -70,6 +72,11 @@ GREY = '#8a8a8a'
 FEATURE_GLYPH = {'corner': '&#9679;', 'edge': '&#9644;', 'surface': '&#9635;', 'raw': '&#183;'}
 
 CLEANUP_EVENT_ID = 'FusionIPWInspector_Cleanup'
+CLICK_EVENT_ID = 'FusionIPWInspector_Click'
+REFRESH_EVENT_ID = 'FusionIPWInspector_Refresh'
+VISIBILITY_EVENT_ID = 'FusionIPWInspector_Visibility'
+CLICK_MAX_DRAG_PX = 4.0
+MODEL_PICK_GRACE_S = 0.3
 CYCLE_KEYS = (ord('N'), adsk.core.KeyCodes.TabKeyCode)   # next snap candidate
 # Developer aid: when this flag file exists, every hover hit is written to the diagnostics log.
 _HOVER_DEBUG = os.path.isfile(os.path.join(os.environ.get('LOCALAPPDATA', ''), 'FusionIPWInspector', 'hover_debug'))
@@ -113,7 +120,8 @@ class InspectorCommand:
         self._definition.commandCreated.add(created)
         _handlers.append(created)
         for event_id, handler in ((NEW_FILE_EVENT_ID, _NewFileHandler(self)), (SNAP_READY_EVENT_ID, _SnapReadyHandler(self)),
-                                  (CLEANUP_EVENT_ID, _CleanupHandler(self))):
+                                  (CLEANUP_EVENT_ID, _CleanupHandler(self)), (CLICK_EVENT_ID, _ClickHandler(self)),
+                                  (REFRESH_EVENT_ID, _RefreshHandler(self)), (VISIBILITY_EVENT_ID, _VisibilityHandler(self))):
             try:
                 self.app.unregisterCustomEvent(event_id)
             except Exception:
@@ -140,7 +148,8 @@ class InspectorCommand:
                 pass
             self._doc_handler = None
         sweep_orphans(self.app)
-        for event_id in (NEW_FILE_EVENT_ID, SNAP_READY_EVENT_ID, CLEANUP_EVENT_ID):
+        for event_id in (NEW_FILE_EVENT_ID, SNAP_READY_EVENT_ID, CLEANUP_EVENT_ID, CLICK_EVENT_ID, REFRESH_EVENT_ID,
+                         VISIBILITY_EVENT_ID):
             try:
                 self.app.unregisterCustomEvent(event_id)
             except Exception:
@@ -212,10 +221,26 @@ class InspectorCommand:
         log.info('new stock file detected: %s' % path)
         session.run_action(PendingAction('load_saved', setup=session.selected_setup(), path=path))
 
-    def on_snap_ready(self, fingerprint: str) -> None:
+    def on_snap_ready(self, payload: str) -> None:
         session = self.session
         if session is not None:
-            session.on_snap_ready(fingerprint)
+            fingerprint, _, stage = payload.partition('|')
+            session.on_snap_ready(fingerprint, stage or 'index')
+
+    def on_click_event(self) -> None:
+        session = self.session
+        if session is not None:
+            session.on_click_deferred()
+
+    def on_visibility_event(self, payload: str) -> None:
+        session = self.session
+        if session is not None:
+            session.apply_ipw_visibility(payload == '1')
+
+    def on_refresh_event(self) -> None:
+        session = self.session
+        if session is not None and session.markers is not None:
+            session.markers.deferred_refresh()
 
     def on_document_activated(self, doc: adsk.core.Document) -> None:
         """Another document came to the front while the inspector was open: end the session.
@@ -310,6 +335,10 @@ class _Session:
         self._busy = False
         self._notice = ''        # short transient message, e.g. "XYZ copied"
         self._closed = False
+        self._mouse_down: Optional[tuple] = None
+        self._model_pick_at = 0.0
+        self._ipw_visible = True
+        self._built_at = time.perf_counter()
 
     # ------------------------------------------------------------- building
     def build(self) -> bool:
@@ -331,6 +360,8 @@ class _Session:
         self.unit = normalize_unit(document_length_unit(self.design))
         sweep_orphans(self.app, self.doc)
         self.markers = Markers(self._graphics_groups(), _model_size_mm(self.design))
+        self.markers.refresh_on_preview = not os.path.isfile(os.path.join(os.environ.get('LOCALAPPDATA', ''), 'FusionIPWInspector', 'no_refresh'))
+        self.markers.schedule_refresh = lambda: self.app.fireCustomEvent(REFRESH_EVENT_ID, '')
         log.set_enabled(bool(self.prefs.get('diagnostics')))
         resume = self.owner.resume or {}
         self.owner.resume = None
@@ -353,6 +384,11 @@ class _Session:
 
         status = inputs.addTextBoxCommandInput(IN_STATUS, ' ', '', 2, True)
         status.isFullWidth = True
+
+        self._ipw_visible = bool(resume.get('show_ipw', True))
+        show_ipw = inputs.addBoolValueInput(IN_SHOW_IPW, 'Show IPW', True, '', self._ipw_visible)
+        show_ipw.tooltip = ('Hide or show the in-process stock overlay. Snapping data stays loaded; '
+                            'the model itself is never touched.')
 
         pick = inputs.addSelectionInput(IN_PICK, 'Pick point', 'Hover the in-process stock: corner, edge or surface. N cycles. Click to pick.')
         pick.setSelectionLimits(0, 1)
@@ -394,6 +430,7 @@ class _Session:
         self._update_details()
         self._apply_pick_filters()
         pick.hasFocus = True
+        log.info('dialog built in %.3f s' % (time.perf_counter() - self._built_at))
         return True
 
     def _graphics_groups(self):
@@ -443,6 +480,7 @@ class _Session:
         if self.result is not None and self.result.frame is not None:
             self.snap.attach(self.result.fingerprint, self.result.stock_path, self.result.unit_scale_mm, self.result.frame)
             self.owner.stop_watcher()
+            self._configure_mesh()
         else:
             self.snap.detach()
             folder = self.prefs.get('last_stock_folder') or ''
@@ -450,13 +488,52 @@ class _Session:
                 self.owner.start_watcher(folder)
         self._update_status()
 
+    def _configure_mesh(self) -> None:
+        """The stock overlay is display only: hovering and clicking go through our own ray cast,
+        so Fusion never hit-tests or highlights the 829k-triangle body."""
+        try:
+            occ, mesh = self.stock.mesh_occurrence(self.doc)
+            if mesh is not None:
+                mesh.isSelectable = False
+            if occ is not None and occ.isLightBulbOn != self._ipw_visible:
+                occ.isLightBulbOn = self._ipw_visible
+        except Exception as exc:
+            log.error('configuring the stock overlay failed', exc)
+
+    def _set_ipw_visible(self, visible: bool) -> None:
+        """Show IPW checkbox: visibility only; nothing is exported, imported or re-indexed.
+
+        The light bulb is switched from an idle event: a document change made
+        inside the dialog's own inputChanged handler does not stick.
+        """
+        self._ipw_visible = visible
+        if not visible and self.snap.preview is not None:
+            self.snap.end_hover()
+            self._draw_preview()
+        try:
+            self.app.fireCustomEvent(VISIBILITY_EVENT_ID, '1' if visible else '0')
+        except Exception as exc:
+            log.error('scheduling the overlay visibility change failed', exc)
+
+    def apply_ipw_visibility(self, visible: bool) -> None:
+        t0 = time.perf_counter()
+        try:
+            occ, _ = self.stock.mesh_occurrence(self.doc)
+            if occ is not None:
+                occ.isLightBulbOn = visible
+                self.app.activeViewport.refresh()
+                log.info('Show IPW %s in %.1f ms (light bulb now %s)' % (
+                    'on' if visible else 'off', (time.perf_counter() - t0) * 1000.0, occ.isLightBulbOn))
+        except Exception as exc:
+            log.error('toggling the stock overlay failed', exc)
+
     def _update_status(self) -> None:
         box = adsk.core.TextBoxCommandInput.cast(self.inputs.itemById(IN_STATUS))
         setup = self.selected_setup()
         last = self.owner.actions.last_result
         if self.result is not None:
             title = 'Current IPW' if self.result.source == SOURCE_CURRENT else 'Saved IPW'
-            state = {'ready': 'Ready', 'preparing': 'Preparing snapping&hellip;', 'none': 'Ready'}[self.snap.state]
+            state = {'ready': 'Ready', 'preparing': 'Preparing IPW&hellip;', 'none': 'Ready'}[self.snap.state]
             if self.result.is_plain_box:
                 state = 'Unmachined box'
             line = '<b>&#9679; %s</b> &nbsp;&middot;&nbsp; %s &nbsp;&middot;&nbsp; %s' % (title, setup.name, state)
@@ -514,9 +591,9 @@ class _Session:
     def _apply_pick_filters(self) -> None:
         pick = adsk.core.SelectionCommandInput.cast(self.inputs.itemById(IN_PICK))
         allow_model = adsk.core.BoolValueCommandInput.cast(self.inputs.itemById(IN_PICK_MODEL))
-        mesh_only = self.result is not None and self.result.mesh_body_valid and not (allow_model and allow_model.value)
+        model_ok = bool(allow_model and allow_model.value) or self.result is None or not self.result.mesh_body_valid
         pick.clearSelectionFilter()
-        for f in (('MeshBodies',) if mesh_only else MODEL_FILTERS):
+        for f in (MODEL_FILTERS if model_ok else ('MeshBodies',)):
             pick.addSelectionFilter(f)
 
     # ------------------------------------------------------------ drawing
@@ -532,7 +609,7 @@ class _Session:
         self._draw_preview()
 
     def _draw_preview(self) -> None:
-        """Draw (or remove) the hover preview directly; never through executePreview."""
+        """Move (or hide) the persistent hover marker directly; never through executePreview."""
         pv = self.snap.preview
         if pv is None:
             self.markers.clear_preview()
@@ -550,23 +627,79 @@ class _Session:
             log.error('doExecutePreview failed', exc)
 
     # ------------------------------------------------------------- events
-    def on_hover(self, selection: adsk.core.Selection) -> None:
-        if self._closed:
+    def on_mouse_move(self, args: adsk.core.MouseEventArgs) -> None:
+        """Hover: ray cast on the analysis mesh, snap, move the persistent marker."""
+        if self._closed or not self._ipw_visible or self.snap.index is None:
             return
+        prof = self.snap.profile
+        t0 = time.perf_counter()
         try:
-            entity = selection.entity
-            if not self.stock.is_temporary_entity(self.doc, entity):
+            pos = args.viewportPosition
+            preview = self.snap.hover_view(args.viewport, pos.x, pos.y)
+            t1 = time.perf_counter()
+            if _HOVER_DEBUG and preview is not None and preview.changed:
+                hit = self.snap.last_hit[0]
+                c = preview.candidate
+                log.info('hover view (%.0f, %.0f) hit %s -> %s %s d=%.3f R=%.3f key=%s' % (
+                    pos.x, pos.y, _r(hit), c.label, _r(c.point), c.distance_from_hit, preview.radius_mm, c.key))
+            if preview is None:
                 if self.snap.preview is not None:
                     self.snap.end_hover()
                     self._draw_preview()
                 return
-            self.snap.hover(selection.point)
-            if _HOVER_DEBUG:
-                v = self.app.activeViewport.modelToViewSpace(selection.point)
-                log.info('hover hit world %s mm view (%.0f, %.0f)' % (_r(api_point_to_mm(selection.point)), v.x, v.y))
-            self._draw_preview()
+            if preview.changed:
+                self._draw_preview()
+                t2 = time.perf_counter()
+                prof.add('graphics', (t2 - t1) * 1000.0 - self.markers.last_refresh_ms)
+                prof.add('refresh', self.markers.last_refresh_ms)
+                prof.add('total', (t2 - t0) * 1000.0)
         except Exception as exc:
             log.error('hover failed', exc)
+
+    def on_mouse_down(self, args: adsk.core.MouseEventArgs) -> None:
+        try:
+            if args.button == adsk.core.MouseButtons.LeftMouseButton:
+                pos = args.viewportPosition
+                self._mouse_down = (pos.x, pos.y)
+        except Exception:
+            self._mouse_down = None
+
+    def on_mouse_up(self, args: adsk.core.MouseEventArgs) -> None:
+        """A click (no drag) on the stock picks the previewed candidate; deferred to an idle
+        event so Fusion has finished its own selection handling first."""
+        try:
+            if args.button != adsk.core.MouseButtons.LeftMouseButton or self._mouse_down is None:
+                return
+            pos = args.viewportPosition
+            dx, dy = pos.x - self._mouse_down[0], pos.y - self._mouse_down[1]
+            self._mouse_down = None
+            if dx * dx + dy * dy > CLICK_MAX_DRAG_PX * CLICK_MAX_DRAG_PX:
+                return
+            if self.snap.preview is None or not self._ipw_visible:
+                return
+            self.app.fireCustomEvent(CLICK_EVENT_ID, '')
+        except Exception as exc:
+            log.error('click handling failed', exc)
+
+    def on_click_deferred(self) -> None:
+        if self._closed or self.frame is None:
+            return
+        if time.perf_counter() - self._model_pick_at < MODEL_PICK_GRACE_S:
+            return                      # Fusion selected model geometry for this click
+        committed = self.snap.commit_current()
+        if committed is None:
+            return
+        candidate, world_mm = committed
+        self.point = InspectedPoint.from_world(world_mm, self.frame, 'ipw', 'In-process stock', candidate.kind,
+                                               candidate.method(), candidate.residual, candidate.confidence())
+        log.info('picked ipw %s world %s mm -> %s %s mm (%s, residual %.4f, cond %.2f, from hit %.3f mm)' % (
+            candidate.kind, _r(world_mm), self.point.setup_name, _r(self.point.setup_xyz_mm),
+            candidate.method(), candidate.residual, candidate.conditioning, candidate.distance_from_hit))
+        self._notice = ''
+        self._update_result()
+        self._update_details()
+        self._update_status()
+        self._request_redraw()
 
     def on_hover_end(self) -> None:
         if self.snap.preview is not None:
@@ -580,7 +713,7 @@ class _Session:
             if self.snap.cycle() is not None:
                 self._draw_preview()
 
-    def on_snap_ready(self, fingerprint: str) -> None:
+    def on_snap_ready(self, fingerprint: str, stage: str) -> None:
         if self._closed or fingerprint != self.snap.fingerprint:
             return
         if self.snap.refresh_ready():
@@ -611,6 +744,8 @@ class _Session:
                 self._update_result()
                 self._update_details()
                 self._request_redraw()
+            elif cid == IN_SHOW_IPW:
+                self._set_ipw_visible(bool(adsk.core.BoolValueCommandInput.cast(changed).value))
             elif cid == IN_SHOW_TRIAD:
                 self.prefs.set('show_triad', bool(adsk.core.BoolValueCommandInput.cast(changed).value))
                 self._request_redraw()
@@ -662,6 +797,7 @@ class _Session:
             pick.clearSelection()
             return
         kind, name = self._classify(entity)
+        self._model_pick_at = time.perf_counter()
         if kind == 'ipw':
             candidate, world_mm = self.snap.commit(hit_point)
             self.point = InspectedPoint.from_world(world_mm, self.frame, kind, name, candidate.kind, candidate.method(),
@@ -727,6 +863,7 @@ class _Session:
             'units': self._display_unit() if self._display_unit() != self.unit else None,
             'advanced': bool(adv.isExpanded) if adv else False,
             'pick_model': bool(allow_model.value) if allow_model else False,
+            'show_ipw': self._ipw_visible,
         }
         self.owner.reopening = True
         self.owner.actions.run(action)
@@ -738,6 +875,7 @@ class _Session:
         self.owner.stop_watcher()
         if self.snap.query_times:
             log.info(self.snap.diagnostics())
+            log.info(self.snap.profile.summary())
         try:
             if self.markers:
                 self.markers.clear()
@@ -773,10 +911,11 @@ class _CommandCreatedHandler(adsk.core.CommandCreatedEventHandler):
             self.owner.session = session
             for event, handler in ((command.inputChanged, _InputChangedHandler(session)),
                                    (command.executePreview, _PreviewHandler(session)),
-                                   (command.preSelectMouseMove, _HoverHandler(session)),
                                    (command.preSelect, _PreSelectHandler(session)),
-                                   (command.preSelectEnd, _HoverEndHandler(session)),
                                    (command.keyDown, _KeyHandler(session)),
+                                   (command.mouseMove, _MouseMoveHandler(session)),
+                                   (command.mouseDown, _MouseDownHandler(session)),
+                                   (command.mouseUp, _MouseUpHandler(session)),
                                    (command.destroy, _DestroyHandler(session)),
                                    (command.execute, _NoopHandler())):
                 event.add(handler)
@@ -808,20 +947,12 @@ class _PreviewHandler(adsk.core.CommandEventHandler):
             log.error('redraw failed', exc)
 
 
-class _HoverHandler(adsk.core.SelectionEventHandler):
-    def __init__(self, session: _Session) -> None:
-        super().__init__()
-        self.session = session
-
-    def notify(self, args: adsk.core.SelectionEventArgs) -> None:
-        self.session.on_hover(args.selection)
-
-
 class _PreSelectHandler(adsk.core.SelectionEventHandler):
-    """Fired right before a click is accepted: keep it light so the selection goes through.
+    """Fired for entities under the cursor: model geometry may be selected, the stock overlay never.
 
-    The hover state is already current from ``preSelectMouseMove``; requesting a
-    preview redraw from inside ``preSelect`` cancels the pending selection.
+    Rejecting the overlay here also stops Fusion from pre-highlighting it on
+    every mouse move; hovering and clicking the stock go through the add-in's own
+    ray cast instead.
     """
 
     def __init__(self, session: _Session) -> None:
@@ -830,18 +961,37 @@ class _PreSelectHandler(adsk.core.SelectionEventHandler):
 
     def notify(self, args: adsk.core.SelectionEventArgs) -> None:
         try:
-            args.isSelectable = True
+            session = self.session
+            args.isSelectable = not session.stock.is_temporary_entity(session.doc, args.selection.entity)
         except Exception:
             pass
 
 
-class _HoverEndHandler(adsk.core.SelectionEventHandler):
+class _MouseMoveHandler(adsk.core.MouseEventHandler):
     def __init__(self, session: _Session) -> None:
         super().__init__()
         self.session = session
 
-    def notify(self, args: adsk.core.SelectionEventArgs) -> None:
-        self.session.on_hover_end()
+    def notify(self, args: adsk.core.MouseEventArgs) -> None:
+        self.session.on_mouse_move(args)
+
+
+class _MouseDownHandler(adsk.core.MouseEventHandler):
+    def __init__(self, session: _Session) -> None:
+        super().__init__()
+        self.session = session
+
+    def notify(self, args: adsk.core.MouseEventArgs) -> None:
+        self.session.on_mouse_down(args)
+
+
+class _MouseUpHandler(adsk.core.MouseEventHandler):
+    def __init__(self, session: _Session) -> None:
+        super().__init__()
+        self.session = session
+
+    def notify(self, args: adsk.core.MouseEventArgs) -> None:
+        self.session.on_mouse_up(args)
 
 
 class _KeyHandler(adsk.core.KeyboardEventHandler):
@@ -893,6 +1043,42 @@ class _DocumentActivatedHandler(adsk.core.DocumentEventHandler):
             self.owner.on_document_activated(args.document)
         except Exception as exc:
             log.error('document activation handling failed', exc)
+
+
+class _VisibilityHandler(adsk.core.CustomEventHandler):
+    def __init__(self, owner: InspectorCommand) -> None:
+        super().__init__()
+        self.owner = owner
+
+    def notify(self, args: adsk.core.CustomEventArgs) -> None:
+        try:
+            self.owner.on_visibility_event(args.additionalInfo)
+        except Exception as exc:
+            log.error('visibility change failed', exc)
+
+
+class _RefreshHandler(adsk.core.CustomEventHandler):
+    def __init__(self, owner: InspectorCommand) -> None:
+        super().__init__()
+        self.owner = owner
+
+    def notify(self, args: adsk.core.CustomEventArgs) -> None:
+        try:
+            self.owner.on_refresh_event()
+        except Exception:
+            pass
+
+
+class _ClickHandler(adsk.core.CustomEventHandler):
+    def __init__(self, owner: InspectorCommand) -> None:
+        super().__init__()
+        self.owner = owner
+
+    def notify(self, args: adsk.core.CustomEventArgs) -> None:
+        try:
+            self.owner.on_click_event()
+        except Exception as exc:
+            log.error('deferred click failed', exc)
 
 
 class _CleanupHandler(adsk.core.CustomEventHandler):
