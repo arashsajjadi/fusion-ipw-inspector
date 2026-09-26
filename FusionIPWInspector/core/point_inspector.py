@@ -84,12 +84,26 @@ class InspectedPoint:
     source_kind: str = 'ipw'           # 'ipw' | 'mesh' | 'model' | 'point'
     source_name: str = ''              # e.g. body name
     notes: List[str] = field(default_factory=list)
+    feature: str = ''                  # 'corner' | 'edge' | 'surface' | 'raw' | '' (not snapped)
+    method: str = ''                   # how the point was reconstructed
+    residual_mm: float = 0.0           # RMS residual of the fits behind the point
+    confidence: str = ''               # 'high' | 'medium' | 'low' | 'raw surface hit'
 
     @classmethod
     def from_world(cls, world_xyz_mm: Vec3, frame: SetupFrame, source_kind: str = 'mesh',
-                   source_name: str = '') -> 'InspectedPoint':
+                   source_name: str = '', feature: str = '', method: str = '', residual_mm: float = 0.0,
+                   confidence: str = '') -> 'InspectedPoint':
         return cls(setup_xyz_mm=frame.world_to_setup(world_xyz_mm), world_xyz_mm=tuple(world_xyz_mm),
-                   setup_name=frame.name, source_kind=source_kind, source_name=source_name)
+                   setup_name=frame.name, source_kind=source_kind, source_name=source_name, feature=feature,
+                   method=method, residual_mm=residual_mm, confidence=confidence)
+
+    def rebased(self, frame: SetupFrame) -> 'InspectedPoint':
+        """The same world point expressed in another setup frame."""
+        return self.from_world(self.world_xyz_mm, frame, self.source_kind, self.source_name, self.feature,
+                               self.method, self.residual_mm, self.confidence)
+
+    def feature_label(self) -> str:
+        return {'corner': 'CORNER', 'edge': 'EDGE', 'surface': 'SURFACE', 'raw': 'POINT'}.get(self.feature, 'POINT')
 
     # ------------------------------------------------------------ formatting
     def formatted_lines(self, unit: str, decimals: Optional[int] = None) -> List[str]:

@@ -77,8 +77,8 @@ def draw(size):
     return img
 
 
-def draw_crosshair(size):
-    """Screen-space marker for the picked point: orange ring + cross, transparent background."""
+def draw_crosshair(size, colour=ACCENT):
+    """Screen-space marker for the picked point: ring + cross, transparent background."""
     s = size
     img = [[CLEAR for _ in range(s)] for _ in range(s)]
     c = (s - 1) / 2.0
@@ -90,7 +90,7 @@ def draw_crosshair(size):
             on_cross = (abs(x - c) <= 0.6 or abs(y - c) <= 0.6) and d <= s * 0.48 and d >= s * 0.12
             centre = d <= 1.3
             if on_ring or on_cross or centre:
-                img[y][x] = ACCENT
+                img[y][x] = colour
             elif abs(d - r_ring) <= 1.9 or ((abs(x - c) <= 1.4 or abs(y - c) <= 1.4) and s * 0.12 <= d <= s * 0.48):
                 img[y][x] = (0, 0, 0, 140)   # thin dark halo for contrast on light stock
     return img
@@ -103,6 +103,7 @@ def main():
     marker_dir = os.path.join(os.path.dirname(OUT_DIR), 'marker')
     os.makedirs(marker_dir, exist_ok=True)
     write_png(os.path.join(marker_dir, 'crosshair.png'), 32, draw_crosshair(32))
+    write_png(os.path.join(marker_dir, 'preview.png'), 24, draw_crosshair(24, (0, 190, 255, 255)))
     print('icons written to', os.path.abspath(OUT_DIR), 'and', os.path.abspath(marker_dir))
 
 
