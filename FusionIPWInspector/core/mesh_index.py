@@ -145,6 +145,36 @@ class MeshIndex:
         self.grid = grid
         self.build_seconds = time.perf_counter() - t0
 
+    # ------------------------------------------------------------- persistence
+    def to_state(self) -> dict:
+        """Plain-data snapshot (arrays, dict, tuples only) for the on-disk cache."""
+        return {'coords': self.coords, 'cell_size': self.cell_size, 'grid': self.grid,
+                'origin_cell': self._origin_cell, 'span': self._span, 'bbox_min': self.bbox_min,
+                'bbox_max': self.bbox_max, 'build_seconds': self.build_seconds}
+
+    @classmethod
+    def from_state(cls, state: dict) -> 'MeshIndex':
+        obj = cls.__new__(cls)
+        obj.coords = state['coords']
+        obj.triangle_count = len(obj.coords) // 9
+        obj.cell_size = state['cell_size']
+        obj.grid = state['grid']
+        obj._origin_cell = tuple(state['origin_cell'])
+        obj._span = state['span']
+        obj._normal_cache = {}
+        obj.build_seconds = state['build_seconds']
+        obj.bbox_min = tuple(state['bbox_min'])
+        obj.bbox_max = tuple(state['bbox_max'])
+        return obj
+
+    def __getstate__(self) -> dict:
+        state = self.__dict__.copy()
+        state['_normal_cache'] = {}
+        return state
+
+    def __setstate__(self, state: dict) -> None:
+        self.__dict__.update(state)
+
     def _cell_key(self, ix: int, iy: int, iz: int) -> int:
         return (ix - self._origin_cell[0]) + (iy - self._origin_cell[1]) * self._span + (iz - self._origin_cell[2]) * self._span * self._span
 
@@ -256,6 +286,105 @@ class MeshIndex:
         q = (a[0] + ab[0] * v + ac[0] * w, a[1] + ab[1] * v + ac[1] * w, a[2] + ab[2] * v + ac[2] * w)
         d = _sub(p, q)
         return _dot(d, d)
+
+    # -------------------------------------------------------------- ray cast
+    def raycast(self, origin: Vec3, direction: Vec3, t_max: float = 1e9) -> Optional[Tuple[float, int, Vec3]]:
+        """First triangle hit by the ray (Amanatides-Woo traversal of the occupied cells).
+
+        Returns ``(t, triangle, point)`` or None. Cells are visited front to back
+        and only their triangles are tested; traversal stops as soon as the best
+        hit lies before the exit of the current cell, so the cost is the empty
+        cells crossed plus a few occupied cells, independent of mesh size.
+        """
+        d = direction
+        ln = _norm(d)
+        if ln < 1e-12:
+            return None
+        d = (d[0] / ln, d[1] / ln, d[2] / ln)
+        # clip against the bounding box (slab test)
+        t_enter, t_exit = 0.0, t_max
+        for axis in range(3):
+            lo, hi = self.bbox_min[axis] - self.cell_size, self.bbox_max[axis] + self.cell_size
+            if abs(d[axis]) < 1e-12:
+                if origin[axis] < lo or origin[axis] > hi:
+                    return None
+                continue
+            inv_d = 1.0 / d[axis]
+            ta, tb = (lo - origin[axis]) * inv_d, (hi - origin[axis]) * inv_d
+            if ta > tb:
+                ta, tb = tb, ta
+            if ta > t_enter:
+                t_enter = ta
+            if tb < t_exit:
+                t_exit = tb
+            if t_enter > t_exit:
+                return None
+        cell = self.cell_size
+        inv = 1.0 / cell
+        floor = math.floor
+        p = (origin[0] + d[0] * t_enter, origin[1] + d[1] * t_enter, origin[2] + d[2] * t_enter)
+        ix, iy, iz = floor(p[0] * inv), floor(p[1] * inv), floor(p[2] * inv)
+        step = [1 if d[a] > 0 else -1 for a in range(3)]
+        t_next = [0.0, 0.0, 0.0]
+        t_delta = [0.0, 0.0, 0.0]
+        idx = [ix, iy, iz]
+        for a in range(3):
+            if abs(d[a]) < 1e-12:
+                t_next[a] = float('inf')
+                t_delta[a] = float('inf')
+            else:
+                boundary = (idx[a] + (1 if step[a] > 0 else 0)) * cell
+                t_next[a] = t_enter + (boundary - p[a]) / d[a]
+                t_delta[a] = cell / abs(d[a])
+        grid = self.grid
+        key = self._cell_key
+        best_t, best_tri = t_exit, -1
+        span = self._span
+        ox, oy, oz = self._origin_cell
+        guard = 0
+        while guard < 100000:
+            guard += 1
+            kx, ky, kz = idx[0] - ox, idx[1] - oy, idx[2] - oz
+            if 0 <= kx < span and 0 <= ky < span and 0 <= kz < span:
+                lst = grid.get(kx + ky * span + kz * span * span)
+                if lst:
+                    for t in lst:
+                        th = self._ray_triangle(origin, d, t)
+                        if th is not None and 0.0 <= th < best_t:
+                            best_t, best_tri = th, t
+            t_cell_exit = min(t_next)
+            if best_tri >= 0 and best_t <= t_cell_exit:
+                break
+            if t_cell_exit > t_exit:
+                break
+            a = 0 if t_next[0] <= t_next[1] and t_next[0] <= t_next[2] else (1 if t_next[1] <= t_next[2] else 2)
+            idx[a] += step[a]
+            t_next[a] += t_delta[a]
+        if best_tri < 0:
+            return None
+        return best_t, best_tri, (origin[0] + d[0] * best_t, origin[1] + d[1] * best_t, origin[2] + d[2] * best_t)
+
+    def _ray_triangle(self, o: Vec3, d: Vec3, t: int) -> Optional[float]:
+        """Moller-Trumbore; returns the ray parameter or None (both facing directions)."""
+        c = self.coords
+        b = t * 9
+        ax, ay, az = c[b], c[b + 1], c[b + 2]
+        e1x, e1y, e1z = c[b + 3] - ax, c[b + 4] - ay, c[b + 5] - az
+        e2x, e2y, e2z = c[b + 6] - ax, c[b + 7] - ay, c[b + 8] - az
+        px, py, pz = d[1] * e2z - d[2] * e2y, d[2] * e2x - d[0] * e2z, d[0] * e2y - d[1] * e2x
+        det = e1x * px + e1y * py + e1z * pz
+        if -1e-12 < det < 1e-12:
+            return None
+        inv = 1.0 / det
+        tx, ty, tz = o[0] - ax, o[1] - ay, o[2] - az
+        u = (tx * px + ty * py + tz * pz) * inv
+        if u < -1e-9 or u > 1.0 + 1e-9:
+            return None
+        qx, qy, qz = ty * e1z - tz * e1y, tz * e1x - tx * e1z, tx * e1y - ty * e1x
+        v = (d[0] * qx + d[1] * qy + d[2] * qz) * inv
+        if v < -1e-9 or u + v > 1.0 + 1e-9:
+            return None
+        return (e2x * qx + e2y * qy + e2z * qz) * inv
 
     # ---------------------------------------------------------------- stats
     def stats(self) -> dict:
