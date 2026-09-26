@@ -4,6 +4,59 @@ All notable changes to Fusion IPW Inspector are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] - 2026-09-26
+
+Product-quality pass on interaction, lifecycle and documentation. The validated
+acquisition, WCS transform and export core of 0.2.0 are unchanged.
+
+### Added
+- Geometric snapping on the in-process stock: hovering previews a **CORNER**
+  (three-plane intersection), **EDGE** (two-plane intersection) or **SURFACE**
+  (plane fit) reconstructed from the triangles around the cursor; a click picks the
+  previewed feature. Screen-space tolerance (12 px), candidate ranking, hysteresis,
+  and **N** to cycle candidates. Internal STL triangulation edges are never edges.
+- Pure-Python spatial index (`core/mesh_index.py`, uniform grid, float32, chunked
+  build) and reconstruction core (`core/snap.py`); the index is built once per stock
+  in a background thread and cached per stock fingerprint.
+- Feature type and real fit metrics in the result: method, RMS residual, conditioning,
+  distance from the cursor hit, and a confidence label derived from them.
+- Lightweight confirmations: "XYZ copied: …" / "G-code copied: …" in the status line.
+- Viewport markers by shape and label (cross, line, diamond, dot), cyan for the
+  preview and orange for the pick; sizes follow the model size.
+- Automatic lifecycle: closing, cancelling, reloading the add-in or switching
+  documents removes the temporary stock and every custom graphics group; leftover
+  graphics are tagged and swept once the dialog has fully closed.
+- `tools/lifecycle_test.py` (in-Fusion acquire/remove cycles with cleanup counts),
+  19 snapping unit tests (52 in total), a demo GIF and CORNER/EDGE screenshots,
+  `docs/SNAPPING.md`, `docs/DEVELOPMENT_HISTORY.md`.
+- The optional installer reports the installed version.
+
+### Changed
+- The panel is shorter and simpler: Setup, one status line
+  (`● Current IPW · Setup5 · Ready`, `Preparing snapping…`, `⚠ No IPW available: …`),
+  the pick control, the result block (feature, X/Y/Z, method · residual · confidence),
+  Copy XYZ, Copy G-code. Everything else is under Advanced (units, WCS triad, allow
+  model selection, reference point, refresh, import saved stock, diagnostics, self test,
+  WCS details and snap statistics).
+- The stock is drawn without triangle edges and slightly translucent so it reads as an
+  overlay, distinct from model geometry.
+- README rewritten for first-time users (install in two minutes, update, uninstall).
+
+### Fixed
+- A blank transient window ("IPW Inspector", 269 × 147 px) flashed during acquisition:
+  it was a progress dialog and is gone. 10 monitored launches show no transient window.
+- The WCS triad was drawn again on every redraw and its groups outlived the dialog,
+  which made axis labels look doubled after a few sessions.
+- Hover previews requested through `executePreview` cancelled the click that followed;
+  the preview is now drawn directly from the hover event.
+- Custom graphics under the cursor could intercept the click; all markers are
+  non-selectable.
+- A manually cycled candidate was overridden by the automatic ranking on the hover
+  that precedes a click.
+
+### Removed
+- The *Remove IPW mesh* button (cleanup is automatic).
+
 ## [0.2.0] - 2026-09-25
 
 The manual Save Stock workflow is gone: clicking **IPW Inspector** fetches the
